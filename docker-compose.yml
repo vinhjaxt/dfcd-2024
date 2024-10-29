@@ -1,0 +1,298 @@
+services:
+  bot:
+    build:
+      context: .
+      network: host
+      dockerfile_inline: |
+        FROM denoland/deno:alpine
+        RUN apk add --no-cache tzdata
+        ENV TZ Asia/Ho_Chi_Minh
+        RUN ln -snf /usr/share/zoneinfo/$$TZ /etc/localtime && echo $$TZ > /etc/timezone
+
+    restart: unless-stopped
+    command: '--allow-all --unstable-net --watch --no-clear-screen /app/main.ts'
+    working_dir: '/app'
+    depends_on:
+      - nginx
+    dns:
+      - 1.1.1.1
+      - 1.0.0.1
+      - 8.8.8.8
+      - 8.8.4.4
+    volumes:
+      - ./flag:/flag:ro
+      - ./bot_config:/bot_config:ro
+      - ./bot-src:/app:ro
+      - ./bot-log:/bot-log:rw
+      - bot-secret:/preshared_bot_secret:rw
+    networks:
+      - default
+    read_only: true
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
+    tmpfs:
+      - /tmp:uid=999,gid=999
+      - /deno-dir/:uid=999,gid=999 # reset if restarts
+  # OK
+  php:
+    build:
+      context: ./php-src/
+      network: host
+      dockerfile_inline: |
+        FROM httpd:2.4.49
+        RUN apt update -y && apt install -y libapache2-mod-php
+    # ports:
+    #   - 8003:80
+    read_only: true
+    networks:
+      - nginx
+      - default
+    volumes:
+      - ./flag:/usr/share/flag-ne:ro # cho các đội ém bug đến cuối round, bug 1
+      - ./php-src:/usr/local/apache2/htdocs/app:ro # vendor dễ fix hoặc ém bug, bug 2
+      - ./php-src/index.php:/usr/local/apache2/htdocs/index.php:ro
+      - ./php-src/httpd.conf:/usr/local/apache2/conf/httpd.conf:ro
+    restart: unless-stopped
+    tmpfs:
+      - /usr/local/apache2/logs:uid=999,gid=999 # cho các đội tạo backdoor, bug 3
+      - /tmp:uid=999,gid=999
+      - /var/tmp:uid=999,gid=999
+      - /usr/local/apache2/htdocs/logs:uid=1,gid=1
+
+  # OK
+  mathsays:
+    image: denoland/deno
+    # ports:
+    #   - 8002:8000
+    networks:
+      - nginx
+      - default
+    read_only: true
+    volumes:
+      - ./flag:/flag:ro
+      - ./mathsays-src:/app:ro
+    working_dir: /app
+    command: '--allow-all --watch --no-clear-screen /app/main.ts' # dễ khai thác, khó viết tool một chút, bug 4
+    restart: unless-stopped
+    tmpfs:
+      - /deno-dir/:exec,uid=999,gid=999 # reset if restarts
+      - /usr/share/fonts:exec,uid=999,gid=999 # reset if restarts
+
+  ws:
+    image: denoland/deno:alpine
+    read_only: true
+    # ports:
+    #   - 8001:8000
+    networks:
+      - nginx
+      - default
+    depends_on:
+      db:
+        # Disable this if you are using an external Postgres database
+        condition: service_healthy
+    environment:
+      PG_DB_URI: postgres://postgres:${POSTGRES_PASSWORD:-psql-password-here}@/${POSTGRES_DB:-app_db}?host=/var/run/postgresql/
+    volumes:
+      - db-run:/var/run/postgresql:ro
+      - ./ws-src:/app:ro
+    working_dir: /app
+    command: '--watch --no-clear-screen --allow-net="[::]:8000" --allow-read=/var/run/postgresql/ --allow-write=/var/run/postgresql/.s.PGSQL.5432 --allow-read=/app/ --allow-write=/app/main.ts --allow-env --unstable-cron --no-prompt /app/main.ts' # bug 5
+    restart: unless-stopped
+    tmpfs:
+      - /deno-dir/:uid=999,gid=999 # reset if restarts
+
+  # proxy kiêm hasher
+  nginx:
+    restart: unless-stopped
+    depends_on:
+      - php
+      - ws
+      - mathsays
+      - postgrest
+    build:
+      context: .
+      network: host
+      dockerfile_inline: |
+        FROM nginx:alpine
+        RUN apk add --no-cache tzdata
+        ENV TZ Asia/Ho_Chi_Minh
+        RUN ln -snf /usr/share/zoneinfo/$$TZ /etc/localtime && echo $$TZ > /etc/timezone
+    cap_add:
+      - NET_ADMIN
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    read_only: true
+    networks:
+      - default
+      - nginx
+    ulimits:
+      nproc: 65535
+      nofile:
+        soft: 262144
+        hard: 262144
+    sysctls:
+      - "net.ipv4.ip_local_port_range=1024 65535"
+    volumes:
+      - ./frontend:/html:ro
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - bot-secret:/preshared_bot_secret:rw
+      - ./bot-log:/bot-log:rw
+      - ./njs:/etc/nginx/njs:ro
+    tmpfs:
+      - /var/cache/nginx:uid=999,gid=999
+      - /var/run:uid=999,gid=999
+
+  # bug 5 và cho các đội tạo backdoor
+  postgrest:
+    read_only: true
+    image: postgrest/postgrest:v12.2.3
+    # ports:
+    #   - "3000:3000"
+    networks:
+      - nginx
+    depends_on:
+      db:
+        # Disable this if you are using an external Postgres database
+        condition: service_healthy
+    restart: unless-stopped
+    environment:
+      PGRST_DB_CHANNEL_ENABLED: true
+      PGRST_DB_MAX_ROWS: 100
+      PGRST_DB_POOL: 100
+      PGRST_DB_URI: postgres://authenticator:${POSTGRES_PASSWORD:-psql-password-here}@localhost/${POSTGRES_DB:-app_db}?host=/var/run/postgresql/
+      PGRST_DB_SCHEMAS: ${PGRST_DB_SCHEMAS:-public,extensions} # so 'auth', 'private', 'extentions' schema functions not callable from rest api
+      PGRST_DB_ANON_ROLE: anon_role
+      PGRST_DB_USE_LEGACY_GUCS: "false"
+      PGRST_OPENAPI_SERVER_PROXY_URI: http://127.0.0.1:3000
+      # https://docs.postgrest.org/en/v12/references/configuration.html#openapi-mode
+      # PGRST_OPENAPI_MODE: ignore-privileges
+    command: "postgrest"
+    volumes:
+      - db-run:/var/run/postgresql:ro
+
+  # Comment out everything below this point if you are using an external Postgres database
+  db:
+    read_only: true
+    build:
+      context: .
+      network: host
+      dockerfile_inline: |
+        FROM postgres:16-alpine
+        ENV TZ Asia/Ho_Chi_Minh
+        RUN apk add --no-cache tzdata && ln -snf /usr/share/zoneinfo/$$TZ /etc/localtime && echo $$TZ > /etc/timezone
+
+        RUN set -eux && apk add --no-cache --virtual .build-deps ca-certificates git autoconf automake g++ gcc make cmake $$DOCKER_PG_LLVM_DEPS \
+          \
+          # Install pgjwt
+          && cd /tmp/ \
+          && git clone --single-branch --depth 1 https://github.com/michelp/pgjwt \
+          && cd /tmp/pgjwt/ && make -j $$(nproc) install \
+          \
+          # Install pg-safeupdate
+          && cd /tmp/ \
+          && git clone --single-branch --depth 1 https://github.com/eradman/pg-safeupdate \
+          && cd /tmp/pg-safeupdate/ && gmake && gmake install \
+          \
+          # Install pgsodium
+          && apk add --no-cache libsodium-dev libsodium \
+          && cd /tmp/ \
+          && git clone --single-branch --depth 1 https://github.com/michelp/pgsodium \
+          && cd /tmp/pgsodium/ && make -j $$(nproc) && make install \
+          \
+          # Install pgsql-http (curl)
+          && apk add --no-cache curl-dev libcurl curl \
+          && cd /tmp/ \
+          && git clone --single-branch --depth 1 https://github.com/pramsey/pgsql-http \
+          && cd /tmp/pgsql-http/ && make -j $$(nproc) && make install \
+          \
+          # Install pg_background
+          && apk add --no-cache krb5-dev krb5-libs \
+          && cd /tmp/ \
+          && git clone --single-branch --depth 1 https://github.com/vibhorkum/pg_background \
+          && cd /tmp/pg_background/ && make -j $$(nproc) && make install \
+          \
+          # Install pg_cron
+          && cd /tmp/ \
+          && git clone --single-branch --depth 1 https://github.com/citusdata/pg_cron \
+          && cd /tmp/pg_cron/ && make -j $$(nproc) && make install \
+          \
+          # Install pg_repack
+          && cd /tmp/ \
+          && apk add --no-cache lz4-dev lz4-libs \
+          && git clone --single-branch --depth 1 https://github.com/reorg/pg_repack \
+          && cd /tmp/pg_repack/ && make -j $$(nproc) && make install \
+          \
+          # Clean up
+          && rm -rf /tmp/* \
+          && apk del libsodium-dev curl-dev lz4-dev krb5-dev .build-deps
+
+          # https://github.com/tembo-io/pgmq
+          # https://github.com/cybertec-postgresql/pg_timetable
+
+        RUN apk add --no-cache sudo && adduser T_T -H -D && echo 'postgres ALL=(T_T) NOPASSWD: ALL' > /etc/sudoers.d/allow-su-to-T_T
+        STOPSIGNAL SIGINT
+    healthcheck:
+      test: pg_isready -U postgres -h localhost
+      interval: 7s
+      timeout: 5s
+      retries: 15
+    command:
+      - postgres
+      - -c
+      - shared_preload_libraries=pg_cron,safeupdate
+      # pgsql-http extension
+      - -c
+      - http.keepalive=on
+      # pg_cron extension
+      - -c
+      - cron.database_name=app_db
+      - -c
+      - cron.use_background_workers=on
+      - -c
+      - max_worker_processes=20
+      - -c
+      - cron.host='' # connect via a unix domain socket
+      - -c
+      # pgsodium extension
+      - pgsodium.enable_event_trigger=off
+      # other configs
+      - -c
+      - log_min_messages=fatal # prevents Realtime polling queries from appearing in logs
+    restart: unless-stopped
+    dns_search: .
+    dns:
+      - 1.1.1.1
+      - 1.0.0.1
+      - 8.8.8.8
+      - 8.8.4.4
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
+    networks:
+      - default
+    environment:
+      DB_ANON_ROLE: anon_role
+      POSTGRES_HOST: /var/run/postgresql
+      PGPASSWORD: ${POSTGRES_PASSWORD:-psql-password-here}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-psql-password-here}
+      PGDATABASE: ${POSTGRES_DB:-app_db}
+      POSTGRES_DB: ${POSTGRES_DB:-app_db}
+    volumes:
+      # Init script
+      - ./init-db:/docker-entrypoint-initdb.d:ro
+      # PGDATA directory is persisted between restarts
+      - db-data:/var/lib/postgresql/data:Z
+      # Use named volume to persist pgsodium decryption key between restarts
+      - db-config:/etc/postgresql-custom:rw
+      - db-run:/var/run/postgresql:rw
+      - ./flag:/usr/lib/include/flag_ne:ro
+
+volumes:
+  db-config:
+  db-run:
+  db-data:
+  bot-secret:
+
+networks:
+  nginx:

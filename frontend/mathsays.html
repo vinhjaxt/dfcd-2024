@@ -1,0 +1,123 @@
+<meta http-equiv="Content-Type" content="text/html;charset=UTF-8" />
+<meta charset="UTF-8" />
+<link
+  href="//maxcdn.bootstrapcdn.com/bootstrap/4.1.1/css/bootstrap.min.css"
+  rel="stylesheet"
+  id="bootstrap-css"
+/>
+<script
+  src="//maxcdn.bootstrapcdn.com/bootstrap/4.1.1/js/bootstrap.min.js"
+></script>
+<script
+  src="//cdnjs.cloudflare.com/ajax/libs/jquery/3.2.1/jquery.min.js"
+></script>
+<!------ Include the above in your HEAD tag ---------->
+
+<style>
+  /*
+   *
+   * ==========================================
+   * CUSTOM UTIL CLASSES
+   * ==========================================
+   *
+   */
+  #upload {
+    opacity: 0;
+  }
+
+  #upload-label {
+    position: absolute;
+    top: 50%;
+    left: 1rem;
+    transform: translateY(-50%);
+  }
+
+  .image-area {
+    border: 2px dashed rgba(255, 255, 255, 0.7);
+    padding: 1rem;
+    position: relative;
+  }
+
+  .image-area::before {
+    content: "Uploaded image result";
+    color: #fff;
+    font-weight: bold;
+    text-transform: uppercase;
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    font-size: 0.8rem;
+    z-index: 1;
+  }
+
+  .image-area img {
+    z-index: 2;
+    position: relative;
+  }
+
+  /*
+   *
+   * ==========================================
+   * FOR DEMO PURPOSES
+   * ==========================================
+   *
+   */
+  body {
+    min-height: 100vh;
+    background-color: #757f9a;
+    background-image: linear-gradient(147deg, #757f9a 0%, #d7dde8 100%);
+  }
+</style>
+
+<div class="container py-5">
+  <!-- For demo purpose -->
+  <header class="text-white text-center">
+    <h1 class="display-4">Math Says</h1>
+    <p class="lead mb-0">Create a simple image talking about Math!</p>
+    <br>
+    <script>
+      const says = [
+        `Công thức tính diện tích\nhình tròn là π.r²`,
+        `Cho biểu mẫu x³ + x - 1 = 8.x + 3.\nHãy tìm giá trị của x?`,
+        `Ta có 7 hằng đẳng thức đáng nhớ\n1. ( a + b )² = a² + 2ab + b²\n2. ( a - b )² = a² - 2ab + b²\n3. a² - b² = ( a - b )( a + b )\n4. ( a + b )³ = a³ + 3a²b + 3ab² + b³\n5. ( a - b )³ = a³ - 3a²b + 3ab² - b³\n6. a³ + b³ = ( a + b )( a² - ab + b² )\n7. a³ - b³ = ( a - b )( a² + ab + b² )`,
+        `Giá trị hàm băm md5(123456)\n  = e10adc3949ba59abbe56e057f20f883e`
+      ];
+      const url = new URL(location.href, "a://b");
+      var t = url.searchParams.get("t");
+      if (t) {
+        says.length = 0;
+        says.push(t);
+      }
+      t = says[Math.round(Math.random() * (says.length - 1))]
+      document.write(
+        `<img src="/mathsays?t=${
+          encodeURIComponent(t)
+        }" alt="" width="450" class="mb-4">`,
+      );
+
+      function mathsays(t) {
+        location.href = "/mathsays.html?t=" + encodeURIComponent(t);
+      }
+    </script>
+  </header>
+
+  <div class="row py-4">
+    <div class="col-lg-6 mx-auto">
+      <!-- Upload image input-->
+      <div class="input-group mb-3 px-2 py-2 rounded-pill bg-white shadow-sm" style="color: black;">
+        <input
+          id="saytext"
+          type="text"
+          onchange="mathsays(this.value);"
+          onkeydown="void(event.keyCode == 13 ? mathsays(this.value) : 0)"
+          class="form-control border-0"
+          placeholder="Nhập công thức, biểu thức hoặc câu hỏi toán học"
+        />
+      </div>
+    </div>
+  </div>
+  <script>
+    saytext.value = t
+  </script>
+</div>
